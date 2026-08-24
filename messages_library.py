@@ -21,6 +21,7 @@ import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 
 # Apple epoch: 2001-01-01 00:00:00 UTC
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -125,6 +126,17 @@ class Chat:
         return ", ".join(self.identifiers) or self.guid
 
 
+def _row_to_chat(r: sqlite3.Row) -> Chat:
+    ids = tuple((r["identifiers"] or "").split(",")) if r["identifiers"] else ()
+    return Chat(
+        chat_id=r["chat_id"],
+        guid=r["guid"],
+        display_name=r["display_name"],
+        identifiers=ids,
+        message_count=r["msg_count"],
+    )
+
+
 def list_chats(conn: sqlite3.Connection) -> list[Chat]:
     """Return all chats with their member identifiers and message counts."""
     rows = conn.execute(
@@ -142,19 +154,7 @@ def list_chats(conn: sqlite3.Connection) -> list[Chat]:
         ORDER BY msg_count DESC
         """
     ).fetchall()
-    chats = []
-    for r in rows:
-        ids = tuple((r["identifiers"] or "").split(",")) if r["identifiers"] else ()
-        chats.append(
-            Chat(
-                chat_id=r["chat_id"],
-                guid=r["guid"],
-                display_name=r["display_name"],
-                identifiers=ids,
-                message_count=r["msg_count"],
-            )
-        )
-    return chats
+    return [_row_to_chat(r) for r in rows]
 
 
 def normalize_phone(s: str) -> str:
@@ -165,6 +165,15 @@ def normalize_phone(s: str) -> str:
     return "".join(ch for ch in s if ch.isdigit())
 
 
+def _identifiers_match(target: str, member: str) -> bool:
+    """True if two *already-normalized* identifiers refer to the same
+    phone/email. Emails must match exactly; phone numbers match if either
+    is a suffix of the other (handles +1-style country-code prefixes)."""
+    if "@" in target:
+        return member == target
+    return bool(member) and (member.endswith(target) or target.endswith(member))
+
+
 def find_chats_for_identifier(conn: sqlite3.Connection, identifier: str) -> list[Chat]:
     """Find chats whose members match a phone number or email.
 
@@ -172,20 +181,11 @@ def find_chats_for_identifier(conn: sqlite3.Connection, identifier: str) -> list
     exact (case-insensitive) match.
     """
     target = normalize_phone(identifier)
-    matches = []
-    for chat in list_chats(conn):
-        for member in chat.identifiers:
-            m = normalize_phone(member)
-            if "@" in target:
-                if m == target:
-                    matches.append(chat)
-                    break
-            else:
-                # match if either is a suffix of the other (handles +1 prefixes)
-                if m and (m.endswith(target) or target.endswith(m)):
-                    matches.append(chat)
-                    break
-    return matches
+    return [
+        chat
+        for chat in list_chats(conn)
+        if any(_identifiers_match(target, normalize_phone(m)) for m in chat.identifiers)
+    ]
 
 
 def iter_messages(conn: sqlite3.Connection, chat_id: int):
@@ -251,6 +251,14 @@ def iter_attachments(conn: sqlite3.Connection, chat_id: int):
         }
 
 
+def _row_to_attachment_meta(r: sqlite3.Row) -> dict:
+    return {
+        "filename": r["att_filename"],
+        "transfer_name": r["att_transfer_name"],
+        "mime_type": r["att_mime_type"],
+    }
+
+
 def iter_messages_full(conn: sqlite3.Connection, chat_id: int):
     """Yield each message with its text AND any attachments, merged in
     chronological order — one dict per message (not per attachment row).
@@ -274,31 +282,27 @@ def iter_messages_full(conn: sqlite3.Connection, chat_id: int):
         """,
         (chat_id,),
     )
-    current = None
-    for r in rows:
-        if current is None or current["_msg_id"] != r["msg_id"]:
-            if current is not None:
-                del current["_msg_id"]
-                yield current
-            current = {
-                "_msg_id": r["msg_id"],
-                "dt": apple_time_to_dt(r["date"]),
-                "is_from_me": bool(r["is_from_me"]),
-                "sender": r["sender_id"],
-                "text": message_text(r),
-                "attachments": [],
-            }
-        if r["att_filename"]:
-            current["attachments"].append(
-                {
-                    "filename": r["att_filename"],
-                    "transfer_name": r["att_transfer_name"],
-                    "mime_type": r["att_mime_type"],
-                }
-            )
-    if current is not None:
-        del current["_msg_id"]
-        yield current
+    # A message with N attachments produces N joined rows sharing one
+    # msg_id; the ORDER BY guarantees those rows are contiguous, so
+    # groupby can collapse them back into one entry per message.
+    for _msg_id, group in groupby(rows, key=lambda r: r["msg_id"]):
+        group_rows = list(group)
+        first = group_rows[0]
+        yield {
+            "dt": apple_time_to_dt(first["date"]),
+            "is_from_me": bool(first["is_from_me"]),
+            "sender": first["sender_id"],
+            "text": message_text(first),
+            "attachments": [_row_to_attachment_meta(r) for r in group_rows if r["att_filename"]],
+        }
+
+
+def chat_message_count(conn: sqlite3.Connection, chat_id: int) -> int:
+    """Count of messages locally stored for a chat."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM chat_message_join WHERE chat_id = ?", (chat_id,)
+    ).fetchone()
+    return row["n"]
 
 
 def chat_date_range(conn: sqlite3.Connection, chat_id: int) -> tuple[datetime | None, datetime | None]:

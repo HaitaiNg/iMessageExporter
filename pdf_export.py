@@ -16,7 +16,7 @@ import tempfile
 from fpdf import FPDF
 from PIL import Image
 
-from ios_backup import Backup, extract_file
+from ios_backup import Backup, resolve_attachment
 
 MARGIN_MM = 15
 MAX_IMAGE_WIDTH_MM = 120
@@ -45,13 +45,17 @@ def _convert_heic_to_jpeg(src: str, tmpdir: str) -> str | None:
 
 def _resolve_attachment_path(filename: str, backup: Backup | None, tmpdir: str) -> str | None:
     """Get a local, readable path to an attachment, extracting from a backup
-    if needed. Returns None if the file can't be found."""
-    if backup is not None:
-        rel = filename[2:] if filename.startswith("~/") else filename.lstrip("/")
-        dst = os.path.join(tmpdir, os.path.basename(filename))
-        return dst if extract_file(backup, "MediaDomain", rel, dst) else None
-    src = os.path.expanduser(filename)
-    return src if os.path.isfile(src) else None
+    if needed. Returns None if the file can't be found.
+
+    On the live Mac DB, the file is already locally readable, so we return
+    its path directly rather than making a needless copy; from a backup, it
+    has to be extracted first.
+    """
+    if backup is None:
+        src = os.path.expanduser(filename)
+        return src if os.path.isfile(src) else None
+    dst = os.path.join(tmpdir, os.path.basename(filename))
+    return dst if resolve_attachment(filename, backup, dst) else None
 
 
 def _line(pdf: FPDF, page_width: float, text: str) -> None:
@@ -77,13 +81,7 @@ def _place_image(pdf: FPDF, path: str, page_width: float) -> None:
     pdf.set_y(pdf.get_y() + h_mm + 3)
 
 
-def build_pdf(
-    messages,
-    backup: Backup | None,
-    output_path: str,
-    title: str = "Conversation",
-) -> None:
-    """messages: iterable of dicts from messages_library.iter_messages_full()."""
+def _setup_pdf(title: str) -> FPDF:
     if not os.path.isfile(FONT_FILE):
         raise RuntimeError(f"Unicode font not found at {FONT_FILE!r} — can't safely render arbitrary message text.")
 
@@ -99,53 +97,76 @@ def build_pdf(
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
+    return pdf
 
+
+def _render_note(pdf: FPDF, page_width: float, text: str) -> None:
+    """A small amber status line, used for placeholders when an attachment
+    can't be shown as an image (missing, unsupported type, embed failure)."""
+    pdf.set_font(FONT_FAMILY, "", 9)
+    pdf.set_text_color(150, 100, 0)
+    _line(pdf, page_width, text)
+
+
+def _render_metadata_line(pdf: FPDF, page_width: float, msg: dict) -> None:
+    who = "Me" if msg["is_from_me"] else (msg["sender"] or "Unknown")
+    when = msg["dt"].strftime("%Y-%m-%d %H:%M:%S") if msg["dt"] else "?"
+    pdf.set_font(FONT_FAMILY, "", 9)
+    pdf.set_text_color(110, 110, 110)
+    _line(pdf, page_width, f"{when} — {who}")
+
+
+def _render_text_body(pdf: FPDF, page_width: float, text: str) -> None:
+    pdf.set_font(FONT_FAMILY, "", 10)
+    pdf.set_text_color(0, 0, 0)
+    _line(pdf, page_width, text)
+
+
+def _render_attachment(pdf: FPDF, page_width: float, att: dict, backup: Backup | None, tmpdir: str) -> None:
+    mime = att["mime_type"] or ""
+    label = att["transfer_name"] or os.path.basename(att["filename"] or "attachment")
+
+    if not mime.startswith("image/") or not att["filename"]:
+        _render_note(pdf, page_width, f"[Attachment: {label} ({mime or 'unknown type'})]")
+        return
+
+    path = _resolve_attachment_path(att["filename"], backup, tmpdir)
+    if path and mime in ("image/heic", "image/heif"):
+        path = _convert_heic_to_jpeg(path, tmpdir) or path
+
+    if not path:
+        _render_note(pdf, page_width, f"[Missing attachment: {label}]")
+        return
+
+    try:
+        _place_image(pdf, path, page_width)
+    except Exception:
+        _render_note(pdf, page_width, f"[Could not embed image: {label}]")
+
+
+def _render_message(pdf: FPDF, page_width: float, msg: dict, backup: Backup | None, tmpdir: str) -> None:
+    _render_metadata_line(pdf, page_width, msg)
+    if msg["text"]:
+        _render_text_body(pdf, page_width, msg["text"])
+    for att in msg["attachments"]:
+        _render_attachment(pdf, page_width, att, backup, tmpdir)
+
+
+def build_pdf(
+    messages,
+    backup: Backup | None,
+    output_path: str,
+    title: str = "Conversation",
+) -> None:
+    """messages: iterable of dicts from messages_library.iter_messages_full()."""
+    pdf = _setup_pdf(title)
     page_width = pdf.w - 2 * MARGIN_MM
 
     with tempfile.TemporaryDirectory(prefix="msgexport_pdf_") as tmpdir:
         for msg in messages:
             if not msg["text"] and not msg["attachments"]:
                 continue
-
-            who = "Me" if msg["is_from_me"] else (msg["sender"] or "Unknown")
-            when = msg["dt"].strftime("%Y-%m-%d %H:%M:%S") if msg["dt"] else "?"
-
-            pdf.set_font(FONT_FAMILY, "", 9)
-            pdf.set_text_color(110, 110, 110)
-            _line(pdf, page_width, f"{when} — {who}")
-
-            if msg["text"]:
-                pdf.set_font(FONT_FAMILY, "", 10)
-                pdf.set_text_color(0, 0, 0)
-                _line(pdf, page_width, msg["text"])
-
-            for att in msg["attachments"]:
-                mime = att["mime_type"] or ""
-                label = att["transfer_name"] or os.path.basename(att["filename"] or "attachment")
-
-                if not mime.startswith("image/") or not att["filename"]:
-                    pdf.set_font(FONT_FAMILY, "", 9)
-                    pdf.set_text_color(150, 100, 0)
-                    _line(pdf, page_width, f"[Attachment: {label} ({mime or 'unknown type'})]")
-                    continue
-
-                path = _resolve_attachment_path(att["filename"], backup, tmpdir)
-                if path and mime in ("image/heic", "image/heif"):
-                    path = _convert_heic_to_jpeg(path, tmpdir) or path
-
-                if not path:
-                    pdf.set_font(FONT_FAMILY, "", 9)
-                    pdf.set_text_color(150, 100, 0)
-                    _line(pdf, page_width, f"[Missing attachment: {label}]")
-                    continue
-
-                try:
-                    _place_image(pdf, path, page_width)
-                except Exception:
-                    pdf.set_font(FONT_FAMILY, "", 9)
-                    pdf.set_text_color(150, 100, 0)
-                    _line(pdf, page_width, f"[Could not embed image: {label}]")
-
+            _render_message(pdf, page_width, msg, backup, tmpdir)
             pdf.ln(3)
 
     pdf.output(output_path)

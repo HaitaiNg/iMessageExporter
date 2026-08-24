@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imessage-export"
+version = "0.1.0"
+description = "Export iMessage conversations (text, attachments, PDF) from chat.db or an iPhone backup"
+requires-python = ">=3.9"
+dependencies = [
+    "pillow",
+    "fpdf2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+imessage-export = "messages_cli:main"
+
+[tool.setuptools]
+py-modules = ["messages_library", "messages_cli", "ios_backup", "pdf_export"]

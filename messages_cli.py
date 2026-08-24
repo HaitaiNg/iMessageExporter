@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
+import sqlite3
 import sys
 
 from messages_library import (
     DEFAULT_DB,
     chat_date_range,
+    chat_message_count,
     connect,
     find_chats_for_identifier,
     iter_attachments,
@@ -29,7 +30,7 @@ from messages_library import (
     list_chats,
     snapshot_db,
 )
-from ios_backup import Backup, extract_file, extract_sms_db, find_backup, list_backups
+from ios_backup import Backup, extract_sms_db, find_backup, list_backups, resolve_attachment
 from pdf_export import build_pdf
 
 
@@ -61,6 +62,16 @@ def _resolve_chat_id(conn, args: argparse.Namespace) -> int:
     return matches[0].chat_id
 
 
+def _open_chat(args: argparse.Namespace) -> tuple[sqlite3.Connection, int, Backup | None]:
+    """Resolve --db/--backup and --chat-id/--identifier together: connect to
+    the right database and pick the target chat. Shared by every subcommand
+    that operates on a single chat."""
+    db_path, backup = _resolve_source(args)
+    conn = connect(db_path)
+    chat_id = _resolve_chat_id(conn, args)
+    return conn, chat_id, backup
+
+
 def cmd_list_chats(args: argparse.Namespace) -> None:
     db_path = _get_db_path(args)
     conn = connect(db_path)
@@ -70,10 +81,7 @@ def cmd_list_chats(args: argparse.Namespace) -> None:
 
 
 def cmd_export(args: argparse.Namespace) -> None:
-    db_path = _get_db_path(args)
-    conn = connect(db_path)
-
-    chat_id = _resolve_chat_id(conn, args)
+    conn, chat_id, _backup = _open_chat(args)
 
     out = open(args.output, "w") if args.output else sys.stdout
     try:
@@ -88,11 +96,19 @@ def cmd_export(args: argparse.Namespace) -> None:
             out.close()
 
 
-def cmd_export_attachments(args: argparse.Namespace) -> None:
-    db_path, backup = _resolve_source(args)
-    conn = connect(db_path)
-    chat_id = _resolve_chat_id(conn, args)
+def _unique_filename(seen_names: dict[str, int], name: str) -> str:
+    """Disambiguate collisions (e.g. multiple "IMG_1234.HEIC" at the same
+    second) by appending an incrementing suffix, keeping the extension."""
+    if name not in seen_names:
+        seen_names[name] = 0
+        return name
+    seen_names[name] += 1
+    root, ext = os.path.splitext(name)
+    return f"{root}_{seen_names[name]}{ext}"
 
+
+def cmd_export_attachments(args: argparse.Namespace) -> None:
+    conn, chat_id, backup = _open_chat(args)
     os.makedirs(args.output_dir, exist_ok=True)
 
     copied = 0
@@ -107,28 +123,10 @@ def cmd_export_attachments(args: argparse.Namespace) -> None:
         who = "me" if att["is_from_me"] else "them"
         when = att["dt"].strftime("%Y%m%d_%H%M%S") if att["dt"] else "unknown"
         base = os.path.basename(att["transfer_name"] or att["filename"])
-        name = f"{when}_{who}_{base}"
-        # Disambiguate collisions (e.g. multiple "IMG_1234.HEIC" at the same second).
-        if name in seen_names:
-            seen_names[name] += 1
-            root, ext = os.path.splitext(name)
-            name = f"{root}_{seen_names[name]}{ext}"
-        else:
-            seen_names[name] = 0
+        name = _unique_filename(seen_names, f"{when}_{who}_{base}")
         dest = os.path.join(args.output_dir, name)
 
-        ok = False
-        if backup is not None:
-            rel = att["filename"]
-            rel = rel[2:] if rel.startswith("~/") else rel.lstrip("/")
-            ok = extract_file(backup, "MediaDomain", rel, dest)
-        else:
-            src = os.path.expanduser(att["filename"])
-            if os.path.isfile(src):
-                shutil.copy2(src, dest)
-                ok = True
-
-        if ok:
+        if resolve_attachment(att["filename"], backup, dest):
             copied += 1
         else:
             skipped += 1
@@ -137,22 +135,16 @@ def cmd_export_attachments(args: argparse.Namespace) -> None:
 
 
 def cmd_export_pdf(args: argparse.Namespace) -> None:
-    db_path, backup = _resolve_source(args)
-    conn = connect(db_path)
-    chat_id = _resolve_chat_id(conn, args)
+    conn, chat_id, backup = _open_chat(args)
     title = args.identifier or f"Chat {chat_id}"
     build_pdf(iter_messages_full(conn, chat_id), backup, args.output, title=title)
     print(f"Wrote {args.output}")
 
 
 def cmd_info(args: argparse.Namespace) -> None:
-    db_path = _get_db_path(args)
-    conn = connect(db_path)
-    chat_id = _resolve_chat_id(conn, args)
+    conn, chat_id, _backup = _open_chat(args)
     first, last = chat_date_range(conn, chat_id)
-    count = sum(1 for _ in conn.execute(
-        "SELECT 1 FROM chat_message_join WHERE chat_id = ?", (chat_id,)
-    ))
+    count = chat_message_count(conn, chat_id)
     print(f"chat_id: {chat_id}")
     print(f"messages stored locally: {count}")
     print(f"earliest: {first}")

@@ -111,6 +111,21 @@ def extract_file(backup: Backup, domain: str, relative_path: str, dst: str) -> b
     return True
 
 
+def resolve_attachment(filename: str, backup: Backup | None, dest: str) -> bool:
+    """Copy an attachment (as stored in the `attachment` table's `filename`
+    column) to `dest`, regardless of whether it's coming from the live Mac
+    filesystem or an iOS backup. Returns False if the file can't be found.
+    """
+    if backup is not None:
+        rel = filename[2:] if filename.startswith("~/") else filename.lstrip("/")
+        return extract_file(backup, "MediaDomain", rel, dest)
+    src = os.path.expanduser(filename)
+    if not os.path.isfile(src):
+        return False
+    shutil.copy2(src, dest)
+    return True
+
+
 def extract_sms_db(backup: Backup) -> str:
     """Copy sms.db (+ -wal/-shm sidecars, if present) out of the backup into
     a fresh temp dir and return the path to the copy.
