@@ -14,9 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+build-app = ["py2app"]
 
 [project.scripts]
 imessage-export = "messages_cli:main"
 
 [tool.setuptools]
-py-modules = ["messages_library", "messages_cli", "ios_backup", "pdf_export"]
+py-modules = ["messages_library", "messages_cli", "ios_backup", "pdf_export", "exporters", "gui_app"]

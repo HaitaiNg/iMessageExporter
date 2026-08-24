@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
 import sys
 
@@ -24,14 +23,11 @@ from messages_library import (
     chat_message_count,
     connect,
     find_chats_for_identifier,
-    iter_attachments,
-    iter_messages,
-    iter_messages_full,
     list_chats,
     snapshot_db,
 )
-from ios_backup import Backup, extract_sms_db, find_backup, list_backups, resolve_attachment
-from pdf_export import build_pdf
+from ios_backup import Backup, extract_sms_db, find_backup, list_backups
+from exporters import export_attachments, export_pdf, export_text
 
 
 def _resolve_source(args: argparse.Namespace) -> tuple[str, Backup | None]:
@@ -82,62 +78,21 @@ def cmd_list_chats(args: argparse.Namespace) -> None:
 
 def cmd_export(args: argparse.Namespace) -> None:
     conn, chat_id, _backup = _open_chat(args)
-
-    out = open(args.output, "w") if args.output else sys.stdout
-    try:
-        for msg in iter_messages(conn, chat_id):
-            if not msg["text"]:
-                continue
-            who = "Me" if msg["is_from_me"] else (msg["sender"] or "Unknown")
-            when = msg["dt"].strftime("%Y-%m-%d %H:%M:%S") if msg["dt"] else "?"
-            out.write(f"[{when}] {who}: {msg['text']}\n")
-    finally:
-        if out is not sys.stdout:
-            out.close()
-
-
-def _unique_filename(seen_names: dict[str, int], name: str) -> str:
-    """Disambiguate collisions (e.g. multiple "IMG_1234.HEIC" at the same
-    second) by appending an incrementing suffix, keeping the extension."""
-    if name not in seen_names:
-        seen_names[name] = 0
-        return name
-    seen_names[name] += 1
-    root, ext = os.path.splitext(name)
-    return f"{root}_{seen_names[name]}{ext}"
+    written = export_text(conn, chat_id, args.output)
+    if args.output:
+        print(f"Wrote {written} messages to {args.output}")
 
 
 def cmd_export_attachments(args: argparse.Namespace) -> None:
     conn, chat_id, backup = _open_chat(args)
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    copied = 0
-    skipped = 0
-    seen_names: dict[str, int] = {}
-
-    for att in iter_attachments(conn, chat_id):
-        if not att["filename"]:
-            skipped += 1
-            continue
-
-        who = "me" if att["is_from_me"] else "them"
-        when = att["dt"].strftime("%Y%m%d_%H%M%S") if att["dt"] else "unknown"
-        base = os.path.basename(att["transfer_name"] or att["filename"])
-        name = _unique_filename(seen_names, f"{when}_{who}_{base}")
-        dest = os.path.join(args.output_dir, name)
-
-        if resolve_attachment(att["filename"], backup, dest):
-            copied += 1
-        else:
-            skipped += 1
-
-    print(f"Copied {copied} attachments to {args.output_dir} ({skipped} missing/skipped)")
+    result = export_attachments(conn, chat_id, backup, args.output_dir)
+    print(f"Copied {result.copied} attachments to {args.output_dir} ({result.skipped} missing/skipped)")
 
 
 def cmd_export_pdf(args: argparse.Namespace) -> None:
     conn, chat_id, backup = _open_chat(args)
     title = args.identifier or f"Chat {chat_id}"
-    build_pdf(iter_messages_full(conn, chat_id), backup, args.output, title=title)
+    export_pdf(conn, chat_id, backup, args.output, title=title)
     print(f"Wrote {args.output}")
 
 
