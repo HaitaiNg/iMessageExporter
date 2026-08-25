@@ -8,8 +8,17 @@ this Mac, or from a local (unencrypted) iPhone backup made with Finder.
 This is a small, focused Python tool — not a full port of
 [imessage-exporter](https://github.com/ReagentX/imessage-exporter) (the
 Rust project this was originally scoped against). It covers plain-text
-messages and their attachments; exotic message types (polls, Digital Touch,
-handwriting, business chat, etc.) aren't specially handled.
+messages and their attachments. 
+
+## Motivation
+I created this tool for two main reasons: to export a full backup of my iMessages as a PDF 
+(so I can safely delete them and free up iCloud storage), and to turn my message history into a dataset 
+I can analyze for stats and trends.
+
+My next idea is to fine-tune an LLM on my message history so it can mimic my texting style
+and eventually, reply to messages for me. This will be a separate repository and project.
+The message data I have includes other people's texts alongside mine. 
+I still need to review and get consent and green light from my friends. 
 
 ## Requirements
 
@@ -74,6 +83,8 @@ Run `imessage-export <command> --help` for the full flag list.
 
 For people who don't want to use the command line, there's a Tkinter GUI
 (`gui_app.py`) that can be packaged into a double-clickable `.app`.
+
+<insert video of GUI here> 
 
 **Important:** build it with a Python that has a modern Tk, not macOS's
 system Python. macOS's built-in Python links against Apple's bundled Tcl/Tk
