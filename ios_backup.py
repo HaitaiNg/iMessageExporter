@@ -41,7 +41,15 @@ def list_backups(root: str = BACKUP_ROOT) -> list[Backup]:
     backups = []
     if not os.path.isdir(root):
         return backups
-    for udid in sorted(os.listdir(root)):
+    try:
+        udids = os.listdir(root)
+    except OSError:
+        # Sandboxed/TCC-restricted launches (e.g. the packaged .app, which
+        # has its own permission identity separate from a Terminal session)
+        # can have this path readable-as-existing but not listable. Treat
+        # that the same as "no backups" rather than crashing on startup.
+        return backups
+    for udid in sorted(udids):
         backup_dir = os.path.join(root, udid)
         manifest_plist = os.path.join(backup_dir, "Manifest.plist")
         if not os.path.isfile(manifest_plist):
@@ -88,7 +96,16 @@ def _file_id_for(backup_dir: str, domain: str, relative_path: str) -> str | None
             f"{manifest_db} not found — this looks like a pre-iOS-10 backup "
             "format (Manifest.mbdb), which isn't supported."
         )
-    conn = sqlite3.connect(f"file:{manifest_db}?mode=ro", uri=True)
+    # Manifest.db is written in WAL journal mode. A plain mode=ro connection
+    # still needs to create a "-shm" file alongside it (for WAL's shared
+    # memory index) unless one already exists — and since we're reading it
+    # in place rather than copying it (unlike chat.db/sms.db elsewhere in
+    # this codebase, which always bring their -wal/-shm siblings along),
+    # that fails with "unable to open database file". immutable=1 tells
+    # SQLite to skip the WAL machinery entirely and just read the file
+    # as-is, which is safe here since Manifest.db is static once Finder
+    # reports the backup finished.
+    conn = sqlite3.connect(f"file:{manifest_db}?mode=ro&immutable=1", uri=True)
     try:
         row = conn.execute(
             "SELECT fileID FROM Files WHERE domain = ? AND relativePath = ?",

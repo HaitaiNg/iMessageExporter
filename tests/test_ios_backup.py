@@ -33,6 +33,11 @@ def _make_backup(
 
     manifest_db = os.path.join(backup_dir, "Manifest.db")
     conn = sqlite3.connect(manifest_db)
+    # Real Finder backups write Manifest.db in WAL mode — match that here so
+    # these tests actually exercise the WAL-vs-read-only-open interaction
+    # (see the immutable=1 comment in ios_backup._file_id_for) rather than
+    # a plain rollback-journal file that doesn't hit that code path at all.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT)")
     for (domain, relative_path), content in (files or {}).items():
         file_id = _file_id(domain, relative_path)

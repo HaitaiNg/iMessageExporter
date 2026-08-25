@@ -34,13 +34,35 @@ FORMAT_ATTACHMENTS = "Attachments (folder)"
 FORMAT_PDF = "PDF (text + photos)"
 FORMATS = [FORMAT_TEXT, FORMAT_ATTACHMENTS, FORMAT_PDF]
 
+# Color palette + fonts for the custom "clam"-based look below. Kept as
+# module constants (rather than buried in _setup_style) so the whole visual
+# identity is readable in one place.
+BG_MAIN = "#f5f5f7"
+BG_CARD = "#ffffff"
+BORDER = "#dcdce1"
+ACCENT = "#0a84ff"
+ACCENT_ACTIVE = "#0071e3"
+TEXT_PRIMARY = "#1d1d1f"
+TEXT_SECONDARY = "#6e6e73"
+ROW_ALT = "#f2f2f5"
+STATUS_COLORS = {"info": TEXT_SECONDARY, "success": "#1a7f37", "error": "#d70015"}
+
+FONT_HEADER = ("SF Pro Display", 19, "bold")
+FONT_SUBTITLE = ("SF Pro Text", 12)
+FONT_LABEL = ("SF Pro Text", 12)
+FONT_BODY = ("SF Pro Text", 12)
+FONT_LIST = ("SF Pro Text", 13)
+FONT_BUTTON = ("SF Pro Text", 12, "bold")
+
 
 class ExportApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("iMessage Export")
-        self.geometry("560x480")
+        self.geometry("600x520")
         self.minsize(480, 420)
+        self.configure(bg=BG_MAIN)
+        self._setup_style()
 
         # A sqlite3.Connection can only be used from the thread that created
         # it, but each background operation below runs on its own fresh
@@ -88,52 +110,151 @@ class ExportApp(tk.Tk):
         threading.Thread(target=runner, daemon=True).start()
 
     # ------------------------------------------------------------------
+    # Style
+    # ------------------------------------------------------------------
+
+    def _setup_style(self) -> None:
+        """Switch to the 'clam' theme so colors/fonts below actually take
+        effect — the default macOS 'aqua' theme renders native controls and
+        mostly ignores ttk style overrides (backgrounds, custom button
+        colors), which is why the stock look was flat and generic."""
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure("TFrame", background=BG_MAIN)
+        style.configure("Card.TFrame", background=BG_CARD)
+        style.configure("TLabel", background=BG_MAIN, foreground=TEXT_PRIMARY, font=FONT_BODY)
+        style.configure("Header.TLabel", background=BG_MAIN, foreground=TEXT_PRIMARY, font=FONT_HEADER)
+        style.configure("Subtitle.TLabel", background=BG_MAIN, foreground=TEXT_SECONDARY, font=FONT_SUBTITLE)
+        style.configure("Field.TLabel", background=BG_MAIN, foreground=TEXT_SECONDARY, font=FONT_LABEL)
+        style.configure("Status.TLabel", background=BG_MAIN, font=FONT_SUBTITLE)
+
+        style.configure(
+            "TEntry", fieldbackground=BG_CARD, bordercolor=BORDER, lightcolor=BORDER,
+            darkcolor=BORDER, padding=6, font=FONT_BODY,
+        )
+        style.configure(
+            "TCombobox", fieldbackground=BG_CARD, background=BG_CARD, bordercolor=BORDER,
+            lightcolor=BORDER, darkcolor=BORDER, padding=5, arrowsize=12, font=FONT_BODY,
+        )
+        style.map("TCombobox", fieldbackground=[("readonly", BG_CARD)], foreground=[("readonly", TEXT_PRIMARY)])
+        self.option_add("*TCombobox*Listbox.background", BG_CARD)
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.option_add("*TCombobox*Listbox.font", FONT_BODY)
+
+        style.configure(
+            "TButton", background=BG_CARD, foreground=TEXT_PRIMARY, bordercolor=BORDER,
+            lightcolor=BG_CARD, darkcolor=BG_CARD, focusthickness=0, padding=(10, 6), font=FONT_BODY,
+        )
+        style.map("TButton", background=[("active", ROW_ALT)])
+
+        style.configure(
+            "Accent.TButton", background=ACCENT, foreground="white", bordercolor=ACCENT,
+            lightcolor=ACCENT, darkcolor=ACCENT, focusthickness=0, padding=(14, 7), font=FONT_BUTTON,
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("disabled", "#b7d9fb"), ("active", ACCENT_ACTIVE)],
+            foreground=[("disabled", "white")],
+        )
+
+        style.configure("Vertical.TScrollbar", background=BG_MAIN, troughcolor=BG_MAIN, bordercolor=BG_MAIN)
+        style.configure("TSeparator", background=BORDER)
+
+    # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
     def _build_widgets(self) -> None:
-        pad = {"padx": 10, "pady": 6}
+        container = ttk.Frame(self, padding=(20, 18))
+        container.pack(fill="both", expand=True)
 
-        source_frame = ttk.Frame(self)
-        source_frame.pack(fill="x", **pad)
+        header = ttk.Frame(container)
+        header.pack(fill="x")
+        ttk.Label(header, text="iMessage Export", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(
+            header, text="Pick a chat, pick a format, export it.", style="Subtitle.TLabel"
+        ).pack(anchor="w", pady=(2, 16))
 
-        ttk.Label(source_frame, text="Source:").pack(side="left")
+        source_frame = ttk.Frame(container)
+        source_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(source_frame, text="Source", style="Field.TLabel").pack(anchor="w", pady=(0, 4))
+        source_row = ttk.Frame(source_frame)
+        source_row.pack(fill="x")
         self.source_var = tk.StringVar(value="Live Mac database")
-        self.source_menu = ttk.Combobox(source_frame, textvariable=self.source_var, state="readonly")
-        self.source_menu.pack(side="left", fill="x", expand=True, padx=(6, 6))
+        self.source_menu = ttk.Combobox(source_row, textvariable=self.source_var, state="readonly")
+        self.source_menu.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.source_menu.bind("<<ComboboxSelected>>", self._on_source_selected)
-        ttk.Button(source_frame, text="Refresh", command=self._refresh_sources).pack(side="left")
+        ttk.Button(source_row, text="Refresh", command=self._refresh_sources).pack(side="left")
 
         self._refresh_sources()
 
-        search_frame = ttk.Frame(self)
-        search_frame.pack(fill="x", **pad)
-        ttk.Label(search_frame, text="Filter:").pack(side="left")
+        search_frame = ttk.Frame(container)
+        search_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(search_frame, text="Search", style="Field.TLabel").pack(anchor="w", pady=(0, 4))
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *_: self._render_chat_list())
-        ttk.Entry(search_frame, textvariable=self.filter_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        ttk.Entry(search_frame, textvariable=self.filter_var).pack(fill="x")
 
-        list_frame = ttk.Frame(self)
-        list_frame.pack(fill="both", expand=True, **pad)
-        self.chat_listbox = tk.Listbox(list_frame, activestyle="dotbox")
-        self.chat_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar = ttk.Scrollbar(list_frame, command=self.chat_listbox.yview)
+        list_card = tk.Frame(container, bg=BORDER)
+        list_card.pack(fill="both", expand=True, pady=(0, 14))
+        list_inner = tk.Frame(list_card, bg=BG_CARD)
+        list_inner.pack(fill="both", expand=True, padx=1, pady=1)
+        self.chat_listbox = tk.Listbox(
+            list_inner,
+            activestyle="none",
+            bg=BG_CARD,
+            fg=TEXT_PRIMARY,
+            font=FONT_LIST,
+            bd=0,
+            highlightthickness=0,
+            selectbackground=ACCENT,
+            selectforeground="white",
+            selectborderwidth=0,
+        )
+        self.chat_listbox.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=6)
+        scrollbar = ttk.Scrollbar(list_inner, command=self.chat_listbox.yview)
         scrollbar.pack(side="right", fill="y")
         self.chat_listbox.config(yscrollcommand=scrollbar.set)
 
-        export_frame = ttk.Frame(self)
-        export_frame.pack(fill="x", **pad)
-        ttk.Label(export_frame, text="Export as:").pack(side="left")
+        export_frame = ttk.Frame(container)
+        export_frame.pack(fill="x")
+        ttk.Label(export_frame, text="Export as", style="Field.TLabel").pack(anchor="w", pady=(0, 4))
+        export_row = ttk.Frame(export_frame)
+        export_row.pack(fill="x")
         self.format_var = tk.StringVar(value=FORMAT_TEXT)
         ttk.Combobox(
-            export_frame, textvariable=self.format_var, values=FORMATS, state="readonly"
-        ).pack(side="left", padx=(6, 0))
+            export_row, textvariable=self.format_var, values=FORMATS, state="readonly"
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self.export_button = ttk.Button(export_frame, text="Export…", command=self._on_export_clicked)
-        self.export_button.pack(side="right")
+        self.export_button = ttk.Button(
+            export_row, text="Export…", command=self._on_export_clicked, style="Accent.TButton"
+        )
+        self.export_button.pack(side="left")
 
+        self.progress = ttk.Progressbar(container, mode="indeterminate")
+
+        self._separator = ttk.Separator(container)
+        self._separator.pack(fill="x", pady=(14, 8))
         self.status_var = tk.StringVar(value="Loading chats…")
-        ttk.Label(self, textvariable=self.status_var, foreground="#666").pack(fill="x", padx=10, pady=(0, 10))
+        self.status_label = ttk.Label(container, textvariable=self.status_var, style="Status.TLabel")
+        self.status_label.pack(fill="x")
+        self._set_status("Loading chats…", "info")
+
+    def _set_status(self, message: str, kind: str = "info") -> None:
+        self.status_var.set(message)
+        self.status_label.configure(foreground=STATUS_COLORS[kind])
+
+    def _show_progress(self) -> None:
+        self.progress.pack(fill="x", pady=(0, 8), before=self._separator)
+        self.progress.start(12)
+
+    def _hide_progress(self) -> None:
+        self.progress.stop()
+        self.progress.pack_forget()
 
     # ------------------------------------------------------------------
     # Data loading
@@ -154,8 +275,9 @@ class ExportApp(tk.Tk):
         self._load_source(use_backup=backup)
 
     def _load_source(self, use_backup: Backup | None) -> None:
-        self.status_var.set("Loading chats…")
+        self._set_status("Loading chats…", "info")
         self.export_button.state(["disabled"])
+        self._show_progress()
 
         def work() -> tuple[str, list[Chat]]:
             if use_backup is not None:
@@ -189,15 +311,17 @@ class ExportApp(tk.Tk):
         self._run_async(work, on_done)
 
     def _on_load_error(self, message: str) -> None:
-        self.status_var.set("Couldn't load chats.")
+        self._hide_progress()
+        self._set_status("Couldn't load chats.", "error")
         messagebox.showerror("iMessage Export", message)
 
     def _on_load_success(self, db_path: str, chats: list[Chat], backup: Backup | None) -> None:
+        self._hide_progress()
         self.db_path = db_path
         self.backup = backup
         self.chats = chats
         self.export_button.state(["!disabled"])
-        self.status_var.set(f"{len(chats)} chats loaded.")
+        self._set_status(f"{len(chats)} chats loaded.", "success")
         self._render_chat_list()
 
     def _render_chat_list(self) -> None:
@@ -206,8 +330,10 @@ class ExportApp(tk.Tk):
         self._visible_chats = [
             c for c in self.chats if not needle or needle in c.label.lower()
         ]
-        for chat in self._visible_chats:
+        for i, chat in enumerate(self._visible_chats):
             self.chat_listbox.insert("end", f"{chat.label}  ({chat.message_count} msgs)")
+            if i % 2 == 1:
+                self.chat_listbox.itemconfig(i, background=ROW_ALT)
 
     # ------------------------------------------------------------------
     # Export
@@ -240,7 +366,8 @@ class ExportApp(tk.Tk):
             return
 
         self.export_button.state(["disabled"])
-        self.status_var.set(f"Exporting {chat.label}…")
+        self._set_status(f"Exporting {chat.label}…", "info")
+        self._show_progress()
 
         def work() -> str:
             conn = connect(self.db_path)
@@ -265,13 +392,15 @@ class ExportApp(tk.Tk):
         self._run_async(work, on_done)
 
     def _on_export_error(self, message: str) -> None:
+        self._hide_progress()
         self.export_button.state(["!disabled"])
-        self.status_var.set("Export failed.")
+        self._set_status("Export failed.", "error")
         messagebox.showerror("iMessage Export", message)
 
     def _on_export_success(self, message: str) -> None:
+        self._hide_progress()
         self.export_button.state(["!disabled"])
-        self.status_var.set("Done.")
+        self._set_status("Done.", "success")
         messagebox.showinfo("iMessage Export", message)
 
 

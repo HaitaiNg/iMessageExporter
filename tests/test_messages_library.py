@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
+import sqlite3
 from datetime import timedelta
 
 import pytest
 
+import messages_library
 from messages_library import (
     APPLE_EPOCH,
     apple_time_to_dt,
     chat_date_range,
+    connect,
     decode_attributed_body,
     find_chats_for_identifier,
     iter_attachments,
@@ -252,3 +256,105 @@ def test_chat_date_range(chat_db):
 
     first, last = chat_date_range(conn, 1)
     assert first < last
+
+
+# ---------------------------------------------------------------------------
+# connect()
+# ---------------------------------------------------------------------------
+
+
+def _make_wal_mode_db_without_sidecar(path: str) -> None:
+    """Build a real on-disk sqlite file whose header declares journal_mode
+    WAL but that has no accompanying -wal/-shm sidecar file — exactly what
+    an iOS backup's sms.db looks like when it was checkpointed on-device
+    before the backup ran (the sidecar never existed to copy). A bare
+    mode=ro connection to a file in this state fails with "unable to open
+    database file", since SQLite needs write access to create a -shm file
+    it can't create in read-only mode; see connect()'s immutable=1 logic.
+    """
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE chat (ROWID INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    for suffix in ("-wal", "-shm"):
+        sidecar = path + suffix
+        if os.path.exists(sidecar):
+            os.remove(sidecar)
+
+
+def test_connect_uri_includes_immutable_when_no_wal_sidecar(tmp_path, monkeypatch):
+    """Verifies connect()'s actual decision logic directly, by capturing the
+    URI it builds, rather than relying on it causing an observable open
+    failure — that failure turns out to be specific to the SQLite build
+    linked into macOS system Python (3.51.0 here); the same reproduction
+    doesn't fail at all under a newer/differently-built SQLite (e.g.
+    Homebrew's 3.53.4, what the project's .venv uses), so a test that only
+    checks "does opening succeed" can't reliably guard this regression."""
+    db_path = str(tmp_path / "sms.db")  # connect() only checks for a "-wal" sidecar; the file needn't exist
+    captured = {}
+    real_connect = sqlite3.connect  # patching messages_library.sqlite3.connect below patches the
+                                     # same module-global sqlite3.connect everywhere, so grab this first
+
+    def fake_connect(database, **kwargs):
+        captured["uri"] = database
+        return real_connect(":memory:")
+
+    monkeypatch.setattr(messages_library.sqlite3, "connect", fake_connect)
+    messages_library.connect(db_path)
+    assert "immutable=1" in captured["uri"]
+
+
+def test_connect_uri_omits_immutable_when_wal_sidecar_present(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "chat.db")
+    open(db_path + "-wal", "wb").close()
+    captured = {}
+    real_connect = sqlite3.connect
+
+    def fake_connect(database, **kwargs):
+        captured["uri"] = database
+        return real_connect(":memory:")
+
+    monkeypatch.setattr(messages_library.sqlite3, "connect", fake_connect)
+    messages_library.connect(db_path)
+    assert "immutable=1" not in captured["uri"]
+
+
+def test_connect_opens_wal_mode_db_with_no_sidecar(tmp_path):
+    db_path = str(tmp_path / "sms.db")
+    _make_wal_mode_db_without_sidecar(db_path)
+    assert not os.path.exists(db_path + "-wal")  # sanity: reproducing the real scenario
+
+    conn = connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM chat").fetchone()[0] == 0
+
+
+def test_connect_does_not_use_immutable_when_wal_sidecar_present(tmp_path):
+    """The live Mac chat.db snapshot always brings its -wal sidecar along
+    (that's where the newest not-yet-checkpointed messages live) — connect()
+    must NOT force immutable=1 in that case, or it would silently ignore
+    that pending data. This just confirms the sidecar-present path still
+    opens and reads correctly (immutable mode would also "work" for a
+    trivial read, so this isn't an airtight behavioral proof, but it does
+    guard against connect() raising on the common, most important case).
+
+    A -wal file only persists on disk while some connection still holds the
+    database open in WAL mode (SQLite auto-checkpoints and removes it once
+    the last connection closes) — so, matching how Messages.app actually
+    behaves (holding chat.db open continuously), we keep a writer connection
+    open here rather than closing it before checking.
+    """
+    db_path = str(tmp_path / "chat.db")
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE chat (ROWID INTEGER PRIMARY KEY)")
+        writer.execute("INSERT INTO chat (ROWID) VALUES (1)")
+        writer.commit()
+        assert os.path.exists(db_path + "-wal")
+
+        result = connect(db_path)
+        assert result.execute("SELECT COUNT(*) FROM chat").fetchone()[0] == 1
+    finally:
+        writer.close()

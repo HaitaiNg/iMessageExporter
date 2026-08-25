@@ -50,8 +50,21 @@ def snapshot_db(src: str = DEFAULT_DB) -> str:
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    """Open a read-only connection to a chat.db snapshot."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    """Open a read-only connection to a chat.db (or iOS backup sms.db) copy.
+
+    These databases are written in WAL journal mode. If a "-wal" sidecar was
+    copied alongside db_path (snapshot_db always does this for the live Mac
+    DB, since that's exactly where the newest not-yet-checkpointed messages
+    live), we connect normally so SQLite reads it. But an iOS backup's sms.db
+    is often checkpointed on-device before the backup runs, so no sidecar
+    exists to copy — and a bare mode=ro connection to a WAL-mode file with no
+    sidecar fails ("unable to open database file"), because SQLite can't
+    create the "-shm" file it needs without write access. immutable=1 tells
+    SQLite to skip that machinery and just read the file directly, which is
+    only safe when there's no pending WAL data to worry about missing.
+    """
+    immutable = "" if os.path.exists(db_path + "-wal") else "&immutable=1"
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro{immutable}", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
