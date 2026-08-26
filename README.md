@@ -4,10 +4,8 @@ Command-line tool for exporting iMessage conversations — text, attachments,
 and a combined PDF — from the live macOS Messages database or an
 unencrypted local iPhone backup.
 
-## Motivation
-I created this tool for two main reasons: to export a full backup of my iMessages as a PDF 
-(so I can safely delete them and free up iCloud storage), and to turn my message history into a dataset 
-I can analyze for stats and trends.
+(All data is fake).
+![Demo](media/video_demo_UI.gif)
 
 ## How it works
 
@@ -79,9 +77,8 @@ Run `imessage-export <command> --help` for the full flag list.
 ## Desktop app (no terminal required)
 
 For people who don't want to use the command line, there's a Tkinter GUI
-(`gui_app.py`) that can be packaged into a double-clickable `.app`.
-
-<insert video of GUI here> 
+(`gui_app.py`) that can be packaged into a double-clickable `.app` (see the
+demo above).
 
 **Important:** build it with a Python that has a modern Tk, not macOS's
 system Python. macOS's built-in Python links against Apple's bundled Tcl/Tk
@@ -122,34 +119,16 @@ do if it can't read the database yet.
 
 ### Reading from an iPhone backup
 
-The Mac's local `chat.db` isn't always the full history — "Messages in
-iCloud" syncing is lazy, and history can be capped by the "Keep Messages"
-retention setting. If an iPhone has a longer local history, you can read
-straight from a **local, unencrypted** Finder backup instead:
+The "Messages in iCloud" syncing is lazy, and history can be capped by the "Keep Messages"
+retention setting. Therefore Mac's local `chat.db` isn't always the full history.
+If an iPhone has a longer local history, you can read straight 
+from a **local, unencrypted** Finder backup instead:
 
 1. Connect the iPhone, open Finder, select it in the sidebar.
 2. Under **General**, choose "Back up all data on your iPhone to this Mac",
    make sure **"Encrypt local backup" is unchecked**, then **Back Up Now**.
 3. `imessage-export list-backups` to find its UDID.
 4. Pass `--backup <udid-or-prefix>` to any command.
-
-Encrypted backups aren't supported (decrypting them requires implementing
-Apple's backup keybag/AES scheme, which this tool doesn't do).
-
-## Known limitations
-
-- **`attributedBody` decoding is heuristic**, not a full typedstream parser:
-  it looks for the first `NSString` value in the blob, which is the plain
-  text for ordinary messages but can misfire on messages with unusual rich
-  formatting.
-- **PDF emoji**: text renders with a bundled macOS Unicode font
-  (`Arial Unicode.ttf`) that doesn't include color emoji glyphs, so emoji
-  show as blank space rather than crashing or garbling the page.
-- **HEIC photos** are converted to JPEG via macOS's `sips` for PDF
-  embedding; if `sips` is unavailable the original file is embedded as-is
-  (and will likely fail to render as an image).
-- **Video/audio attachments** aren't embedded in the PDF, just noted with a
-  placeholder line.
 
 ## Testing
 
@@ -171,6 +150,21 @@ Tests use synthetic fixtures (an in-memory SQLite database shaped like
 `chat.db`, fabricated backup directories, a real temp-file SQLite DB for the
 GUI's threading test, generated images) — no real Messages data is read or
 required to run the suite.
+
+## Future Enhancements
+
+- **`attributedBody` decoding is heuristic**, not a full typedstream parser:
+  it looks for the first `NSString` value in the blob, which is the plain
+  text for ordinary messages but can misfire on messages with unusual rich
+  formatting.
+- **PDF emoji**: text renders with a bundled macOS Unicode font
+  (`Arial Unicode.ttf`) that doesn't include color emoji glyphs, so emoji
+  show as blank space rather than crashing or garbling the page.
+- **HEIC photos** are converted to JPEG via macOS's `sips` for PDF
+  embedding; if `sips` is unavailable the original file is embedded as-is
+  (and will likely fail to render as an image).
+- **Video/audio attachments** aren't embedded in the PDF, just noted with a
+  placeholder line.
 
 ## Acknowledgements
 
