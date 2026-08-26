@@ -1,36 +1,33 @@
 # imessage-export
 
-Command-line tool for reading and exporting conversations from the macOS
-Messages database (`~/Library/Messages/chat.db`), including text, photos and
-other attachments, and a combined PDF — either from the live database on
-this Mac, or from a local (unencrypted) iPhone backup made with Finder.
-
-This is a small, focused Python tool — not a full port of
-[imessage-exporter](https://github.com/ReagentX/imessage-exporter) (the
-Rust project this was originally scoped against). It covers plain-text
-messages and their attachments. 
+Command-line tool for exporting iMessage conversations — text, attachments,
+and a combined PDF — from the live macOS Messages database or an
+unencrypted local iPhone backup.
 
 ## Motivation
 I created this tool for two main reasons: to export a full backup of my iMessages as a PDF 
 (so I can safely delete them and free up iCloud storage), and to turn my message history into a dataset 
 I can analyze for stats and trends.
 
-My next idea is to fine-tune an LLM on my message history so it can mimic my texting style
-and eventually, reply to messages for me. This will be a separate repository and project.
-The message data I have includes other people's texts alongside mine. 
-I still need to review and get consent and green light from my friends. 
+## How it works
+
+```mermaid
+flowchart LR
+    E[messages_cli.py\nCLI] --> D[exporters.py\ntext / attachments / PDF]
+    F[gui_app.py\nDesktop app] --> D
+    D --> C[messages_library.py\nDB access + decoding]
+    A[Live chat.db\non this Mac] --> C
+    B[Local iPhone backup\nvia Finder] --> C
+    D --> G[Output\n.txt / images / .pdf]
+```
 
 ## Requirements
 
-- macOS (the Messages database format and `sips` HEIC conversion are
-  macOS-specific)
-- Python 3.9+ for the CLI. The GUI and the test suite need a Python with a
-  modern Tk — see [Desktop app](#desktop-app-no-terminal-required) below;
-  macOS's system Python does not qualify.
-- **Full Disk Access** for whichever terminal/app runs this tool. macOS
-  gates read access to `~/Library/Messages/chat.db` behind this even for
-  your own account. Grant it under **System Settings → Privacy & Security →
-  Full Disk Access**, then fully quit and reopen your terminal.
+- macOS, Python 3.9+ (the GUI and test suite need a modern Tk — macOS's
+  system Python doesn't have one; see [Desktop app](#desktop-app-no-terminal-required))
+- **Full Disk Access** for your terminal/app, under **System Settings →
+  Privacy & Security**, then restart the terminal — macOS blocks
+  `chat.db` reads without it, even for your own account.
 
 ## Install
 
@@ -154,7 +151,7 @@ Apple's backup keybag/AES scheme, which this tool doesn't do).
 - **Video/audio attachments** aren't embedded in the PDF, just noted with a
   placeholder line.
 
-## Development
+## Testing
 
 Most of the suite runs fine under plain `python3 -m pip install --user -e ".[dev]"`
 + `python3 -m pytest`. **`tests/test_gui_app.py` is the exception** — it
@@ -175,17 +172,8 @@ Tests use synthetic fixtures (an in-memory SQLite database shaped like
 GUI's threading test, generated images) — no real Messages data is read or
 required to run the suite.
 
-## Project layout
+## Acknowledgements
 
-- `messages_library.py` — core DB access: WAL-safe snapshotting, Apple
-  timestamp conversion, `attributedBody` decoding, chat/message/attachment
-  queries.
-- `ios_backup.py` — locates and reads `sms.db` and attachments out of a
-  local Finder iPhone backup.
-- `pdf_export.py` — renders a chat to a single PDF with inline photos.
-- `exporters.py` — the three export operations (text/attachments/PDF) as
-  plain functions, shared by both the CLI and the GUI.
-- `messages_cli.py` — the terminal CLI.
-- `gui_app.py` — the Tkinter desktop app; `setup_app.py` packages it into a
-  `.app` with py2app.
-- `tests/` — the test suite.
+This is a small, focused Python tool that was inspired by
+[imessage-exporter](https://github.com/ReagentX/imessage-exporter), and by
+[imessage-relationship-analytics](https://github.com/rnorlund/imessage-relationship-analytics/blob/main/messages_lib.py).Q
