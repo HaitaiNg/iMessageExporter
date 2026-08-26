@@ -4,8 +4,9 @@ Command-line tool for exporting iMessage conversations — text, attachments,
 and a combined PDF — from the live macOS Messages database or an
 unencrypted local iPhone backup.
 
-(All data is fake).
 ![Demo](media/video_demo_UI.gif)
+
+See `media/group_chat_demo.pdf` for an example of the generated PDF.
 
 ## How it works
 
